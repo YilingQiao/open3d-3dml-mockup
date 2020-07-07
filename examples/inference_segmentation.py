@@ -21,14 +21,15 @@ dataset = SemanticKITTI(cfg)
 # semantic seg -> randlanet
 # pipeline: train/test/inference (model, dataset, cfg)
 
-# gpt2_checkpoint_path = '/home/yiling/d2T/intel2020/RandLA-Net/models/SemanticKITTI/snap-277357'
+gpt2_checkpoint_path = '/home/yiling/d2T/intel2020/RandLA-Net/models/SemanticKITTI/snap-277357'
 model   = randlanet(cfg)
-# load_tf_weights(model, gpt2_checkpoint_path)
-# print("load finish")
+load_tf_weights(model, gpt2_checkpoint_path)
+#print("load finish")
 
 device  = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+#device  = torch.device('cpu')
 
 
-model.run_train(dataset, device)
+#model.run_train(dataset, device)
 model.run_test(dataset, device)
 

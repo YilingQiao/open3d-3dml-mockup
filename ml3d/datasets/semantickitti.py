@@ -20,8 +20,8 @@ class ConfigSemanticKITTI:
     d_in      = 3
     d_feature = 8 
 
-    batch_size = 2  # batch_size during training
-    val_batch_size = 1  # batch_size during validation and test
+    batch_size = 4  # batch_size during training
+    val_batch_size = 4  # batch_size during validation and test
     train_steps = 500  # Number of steps per epochs
     val_steps = 100  # Number of validation steps per epoch
 
@@ -39,12 +39,14 @@ class ConfigSemanticKITTI:
     saving_path = None
 
     # test
-    test_scan_number = '08'
+    test_scan_number = '11'
 
     # inference
     grid_size = 0.06
 
     # training
+    logs_dir = './logs'
+
     adam_lr         = 1e-2
     scheduler_gamma = 0.95
     sampling_type = 'active_learning'
@@ -223,14 +225,14 @@ class ActiveLearningSampler(IterableDataset):
         self.dataset = dataset
         cfg = dataset.cfg
         if split == 'training':
-            num_per_epoch = int(len(dataset.train_list) / cfg.batch_size) * cfg.batch_size
+            num_per_epoch = int(len(dataset.train_list) / cfg.batch_size) 
             path_list = dataset.train_list
         elif split == 'validation':
-            num_per_epoch = int(len(dataset.val_list) / cfg.val_batch_size) * cfg.val_batch_size
+            num_per_epoch = int(len(dataset.val_list) / cfg.val_batch_size) 
             cfg.val_steps = int(len(dataset.val_list) / cfg.batch_size)
             path_list = dataset.val_list
         elif split == 'test':
-            num_per_epoch = int(len(dataset.test_list) / cfg.val_batch_size) * cfg.val_batch_size * 4
+            num_per_epoch = int(len(dataset.test_list) / cfg.val_batch_size) * 4
             path_list = dataset.test_list
             for test_file_name in path_list:
                 points = np.load(test_file_name)
@@ -243,11 +245,11 @@ class ActiveLearningSampler(IterableDataset):
 
         
     def __iter__(self):
+
         return self.spatially_regular_gen()
 
     def __len__(self):
-        return self.num_per_epoch # not equal to the actual size of the dataset, but enable nice progress bars
-
+        return self.num_per_epoch 
 
     def spatially_regular_gen(self):
         for i in range(self.num_per_epoch):
@@ -378,6 +380,8 @@ class SemanticKITTI:
         inputs['interp_idx']    = [torch.from_numpy(arr).to(torch.int64).to(device) 
                                     for arr in input_up_samples]
         inputs['features']      = features.to(device)
+        inputs['input_inds']    = batch_pc_idx
+        inputs['cloud_inds']    = batch_cloud_idx
 
         #print(input_points)   
         #print(input_neighbors)        
