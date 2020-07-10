@@ -1,11 +1,34 @@
 import numpy as np
 import os, argparse, pickle, sys
-from os.path import join
+from os.path import exists, join, isfile, dirname, abspath
 from torch.utils.data import Dataset, IterableDataset, DataLoader, Sampler, BatchSampler
 import torch
 
 import utils.cpp_wrappers.cpp_subsampling.grid_subsampling as cpp_subsampling
 import utils.nearest_neighbors.lib.python.nearest_neighbors as nearest_neighbors
+
+import yaml
+
+
+BASE_DIR = './'
+#BASE_DIR = dirname(abspath(__file__))
+
+data_config = join(BASE_DIR, 'utils', 'semantic-kitti.yaml')
+DATA = yaml.safe_load(open(data_config, 'r'))
+remap_dict = DATA["learning_map_inv"]
+
+# make lookup table for mapping
+max_key = max(remap_dict.keys())
+remap_lut = np.zeros((max_key + 100), dtype=np.int32)
+remap_lut[list(remap_dict.keys())] = list(remap_dict.values())
+
+remap_dict_val = DATA["learning_map"]
+max_key = max(remap_dict_val.keys())
+remap_lut_val = np.zeros((max_key + 100), dtype=np.int32)
+remap_lut_val[list(remap_dict_val.keys())] = list(remap_dict_val.values())
+
+
+
 
 # yaml
 # network
@@ -20,8 +43,8 @@ class ConfigSemanticKITTI:
     d_in      = 3
     d_feature = 8 
 
-    batch_size = 4  # batch_size during training
-    val_batch_size = 4  # batch_size during validation and test
+    batch_size = 1  # batch_size during training
+    val_batch_size = 1  # batch_size during validation and test
     train_steps = 500  # Number of steps per epochs
     val_steps = 100  # Number of validation steps per epoch
 
@@ -38,22 +61,31 @@ class ConfigSemanticKITTI:
     saving = True
     saving_path = None
 
+    main_log_dir = './logs'
+    model_name = 'RandLANet'
+    logs_dir = join(main_log_dir, model_name)
+    ckpt_path = './ml3d/torch/checkpoint/randlanet_semantickitti.pth'
+
     # test
-    test_scan_number = '11'
+    test_split_number   = 11
+    test_result_folder = './test'
 
     # inference
     grid_size = 0.06
 
     # training
-    logs_dir = './logs'
+    training_split = ['00', '01', '02', '03', '04', '05', 
+                        '06', '07', '09', '10']
+    save_ckpt_freq = 20
 
     adam_lr         = 1e-2
     scheduler_gamma = 0.95
     sampling_type = 'active_learning'
 
-    class_weights = [ 55437630, 320797, 541736, 2578735, 3274484, 552662, 184064, 78858,
-                                      240942562, 17294618, 170599734, 6369672, 230413074, 101130274, 476491114,
-                                      9833174, 129609852, 4506626, 1168181]
+    class_weights = [ 55437630, 320797, 541736, 2578735, 3274484, 552662, 
+                        184064, 78858, 240942562, 17294618, 170599734, 
+                        6369672, 230413074, 101130274, 476491114,9833174, 
+                        129609852, 4506626, 1168181]
    
 
 
@@ -163,7 +195,6 @@ class DataProcessing:
         """
 
         if (features is None) and (labels is None):
-            print(points)
             return cpp_subsampling.compute(points, sampleDl=grid_size, verbose=verbose)
         elif labels is None:
             return cpp_subsampling.compute(points, features=features, sampleDl=grid_size, verbose=verbose)
@@ -220,32 +251,37 @@ class DataProcessing:
 
 
 
-class ActiveLearningSampler(IterableDataset):
+class SimpleSampler(IterableDataset):
     def __init__(self, dataset, split='training'):
-        self.dataset = dataset
-        cfg = dataset.cfg
+        cfg         = dataset.cfg
+        path_list   = dataset.get_split_list(split)
+
+        test = 0
         if split == 'training':
-            num_per_epoch = int(len(dataset.train_list) / cfg.batch_size) 
-            path_list = dataset.train_list
+            num_per_epoch = int(len(path_list) / cfg.batch_size) 
+            dataset.train_list = path_list
         elif split == 'validation':
-            num_per_epoch = int(len(dataset.val_list) / cfg.val_batch_size) 
-            cfg.val_steps = int(len(dataset.val_list) / cfg.batch_size)
-            path_list = dataset.val_list
+            num_per_epoch = int(len(path_list) / cfg.val_batch_size) 
+            dataset.val_list = path_list
         elif split == 'test':
-            num_per_epoch = int(len(dataset.test_list) / cfg.val_batch_size) * 4
-            path_list = dataset.test_list
+            num_per_epoch = int(len(path_list) / cfg.val_batch_size) * 4
+            dataset.test_list = path_list
             for test_file_name in path_list:
                 points = np.load(test_file_name)
                 dataset.possibility += [np.random.rand(points.shape[0]) * 1e-3]
                 dataset.min_possibility += [float(np.min(dataset.possibility[-1]))]
+                test = test + 1
+                print(test_file_name)
+                if test == 8:
+                    break
 
         self.num_per_epoch  = num_per_epoch
         self.path_list      = path_list
         self.split          = split
+        self.dataset        = dataset
 
         
     def __iter__(self):
-
         return self.spatially_regular_gen()
 
     def __len__(self):
@@ -253,43 +289,41 @@ class ActiveLearningSampler(IterableDataset):
 
     def spatially_regular_gen(self):
         for i in range(self.num_per_epoch):
-                if self.split != 'test':
-                    cloud_ind = i
-                    pc_path = self.path_list[cloud_ind]
-                    pc, tree, labels = self.dataset.get_data(pc_path)
-                    # crop a small point cloud
-                    pick_idx = np.random.choice(len(pc), 1)
-                    selected_pc, selected_labels, selected_idx = self.dataset.crop_pc(pc, labels, tree, pick_idx)
-                else:
-                    cloud_ind = int(np.argmin(self.dataset.min_possibility))
-                    pick_idx = np.argmin(self.dataset.possibility[cloud_ind])
-                    pc_path = self.path_list[cloud_ind]
-                    pc, tree, labels = self.dataset.get_data(pc_path)
-                    selected_pc, selected_labels, selected_idx = self.dataset.crop_pc(pc, labels, tree, pick_idx)
-                    
-                    # update the possibility of the selected pc
-                    dists = np.sum(np.square((selected_pc - pc[pick_idx]).astype(np.float32)), axis=1)
-                    delta = np.square(1 - dists / np.max(dists))
+            if self.split != 'test':
+                is_test     = False
+                cloud_ind   = i
+                pc_path     = self.path_list[cloud_ind]
+                pc, tree, labels = self.dataset.get_data(pc_path, is_test)
+                pick_idx    = np.random.choice(len(pc), 1)
+                selected_pc, selected_labels, selected_idx = \
+                    self.dataset.crop_pc(pc, labels, tree, pick_idx)
+            else:
+                is_test     = True
+                cloud_ind   = int(np.argmin(self.dataset.min_possibility))
+                pc_path     = self.path_list[cloud_ind]
+                pc, tree, labels = self.dataset.get_data(pc_path, is_test)
+                pick_idx    = np.argmin(self.dataset.possibility[cloud_ind])
+                selected_pc, selected_labels, selected_idx = \
+                    self.dataset.crop_pc(pc, labels, tree, pick_idx)
+ 
+            if self.split == 'test':
+                # update the possibility of the selected pc
+                dists = np.sum(np.square((selected_pc - pc[pick_idx]).astype(np.float32)), axis=1)
+                delta = np.square(1 - dists / np.max(dists))
+                self.dataset.possibility[cloud_ind][selected_idx] += delta
+                self.dataset.min_possibility[cloud_ind] = np.min(self.dataset.possibility[cloud_ind])
 
-                    self.dataset.possibility[cloud_ind][selected_idx] += delta
-                    self.dataset.min_possibility[cloud_ind] = np.min(self.dataset.possibility[cloud_ind])
-
-
-                if True:
-                    yield (selected_pc.astype(np.float32),
-                            selected_labels.astype(np.int64),
-                            selected_idx.astype(np.int64),
-                            np.array([cloud_ind], dtype=np.int64))
-                    '''
-                  
-                    '''
+            yield (selected_pc.astype(np.float32),
+                    selected_labels.astype(np.int64),
+                    selected_idx.astype(np.int64),
+                    np.array([cloud_ind], dtype=np.int64))
+        
 
 
 class SemanticKITTI:
     def __init__(self, cfg):
         self.cfg = cfg
         self.name = 'SemanticKITTI'
-        self.dataset_path = cfg.dataset_path
         self.label_to_names = {0: 'unlabeled',
                                1: 'car',
                                2: 'bicycle',
@@ -311,32 +345,17 @@ class SemanticKITTI:
                                18: 'pole',
                                19: 'traffic-sign'}
         self.num_classes = len(self.label_to_names)
-        self.val_split = '08'
-
-        self.seq_list = np.sort(os.listdir(self.dataset_path))
-
-        self.test_scan_number = cfg.test_scan_number
-        self.train_list, self.val_list, self.test_list = DataProcessing.get_file_list(self.dataset_path,
-                                                                          self.test_scan_number)
-        self.train_list = DataProcessing.shuffle_list(self.train_list)
-        self.val_list = DataProcessing.shuffle_list(self.val_list)
-
+        
         self.possibility = []
         self.min_possibility = []
-
-        val_sampler = ActiveLearningSampler(self, split='validation')
-        train_sampler = ActiveLearningSampler(self, split='training')
-
-        self.train_loader = DataLoader(train_sampler, batch_size=cfg.batch_size)
-        #self.test_loader  = self.get_batch_gen("test")
 
         self.label_values = np.sort([k for k, v in self.label_to_names.items()])
         self.label_to_idx = {l: i for i, l in enumerate(self.label_values)}
         self.ignored_labels = np.sort([0])
         self.cfg.ignored_label_inds = [self.label_to_idx[ign_label] for ign_label in self.ignored_labels]
 
-    def get_ActiveLearningSampler (self, split):
-        return ActiveLearningSampler(self, split=split)
+    def get_sampler (self, split):
+        return SimpleSampler(self, split=split)
 
     def preprocess(self, batch_data, device):
         cfg             = self.cfg
@@ -345,10 +364,10 @@ class SemanticKITTI:
         batch_pc_idx    = batch_data[2]
         batch_cloud_idx = batch_data[3]
 
-        features        = batch_pc
-        input_points    = []
-        input_neighbors = []
-        input_pools = []
+        features         = batch_pc
+        input_points     = []
+        input_neighbors  = []
+        input_pools      = []
         input_up_samples = []
 
         for i in range(cfg.num_layers):
@@ -362,12 +381,6 @@ class SemanticKITTI:
             input_pools.append(pool_i)
             input_up_samples.append(up_i)
             batch_pc = sub_points
-
-        #input_list = input_points + input_neighbors + input_pools + input_up_samples
-        #input_list += [features, batch_label, batch_pc_idx, batch_cloud_idx]
-
-        #print(input_list)
-        #print(len(input_list))
 
         inputs = dict()
         #print(features)
@@ -389,21 +402,77 @@ class SemanticKITTI:
 
         return inputs
 
-    def get_data(self, file_path):
-        seq_id = file_path.split('/')[-3]
-        frame_id = file_path.split('/')[-1][:-4]
-        kd_tree_path = join(self.dataset_path, seq_id, 'KDTree', frame_id + '.pkl')
+    def save_test_result(self, test_probs):
+        cfg = self.cfg
+        
+        test_path = join(cfg.test_result_folder, 'sequences')
+        makedirs(test_path) if not exists(test_path) else None
+        save_path = join(test_path, str(cfg.test_split_number), 
+                                'predictions')
+        makedirs(save_path) if not exists(save_path) else None
+
+        test_scan_name = str(self.cfg.test_split_number)
+
+        for j in range(len(test_probs)):
+            test_file_name = self.test_list[j]
+            frame = test_file_name.split('/')[-1][:-4]
+            proj_path = join(cfg.dataset_path, test_scan_name, 'proj')
+            proj_file = join(proj_path, str(frame) + '_proj.pkl')
+            if isfile(proj_file):
+                with open(proj_file, 'rb') as f:
+                    proj_inds = pickle.load(f)
+            probs = test_probs[j][proj_inds[0], :]
+            pred = np.argmax(probs, 1)
+        
+            store_path = join(test_path, test_scan_name, 'predictions',
+                              str(frame) + '.label')
+            pred = pred + 1
+            pred = remap_lut[pred].astype(np.uint32)
+            pred.tofile(store_path)
+
+
+    def get_data(self, file_path, is_test=False):
+        seq_id          = file_path.split('/')[-3]
+        frame_id        = file_path.split('/')[-1][:-4]
+        kd_tree_path    = join(self.cfg.dataset_path, seq_id, 
+                                'KDTree', frame_id + '.pkl')
         # Read pkl with search tree
         with open(kd_tree_path, 'rb') as f:
             search_tree = pickle.load(f)
         points = np.array(search_tree.data, copy=False)
+
         # Load labels
-        if int(seq_id) >= 11:
-            labels = np.zeros(np.shape(points)[0], dtype=np.uint8)
+        if is_test:
+            labels      = np.zeros(np.shape(points)[0], dtype=np.uint8)
         else:
-            label_path = join(self.dataset_path, seq_id, 'labels', frame_id + '.npy')
-            labels = np.squeeze(np.load(label_path))
+            label_path  = join(self.cfg.dataset_path, seq_id, 'labels', 
+                                frame_id + '.npy')
+            labels      = np.squeeze(np.load(label_path))
         return points, search_tree, labels
+
+
+    def get_split_list(self, split):
+        cfg             = self.cfg
+        dataset_path    = cfg.dataset_path
+        file_list       = []
+
+        if split == 'training':
+            seq_list = cfg.training_split
+        elif split == 'test':
+            seq_list = [str(cfg.test_split_number)]
+        elif split == 'validation':
+            pass
+
+        for seq_id in seq_list:
+            pc_path = join(dataset_path, seq_id, 'velodyne')
+            file_list.append([join(pc_path, f) for f in 
+                                np.sort(os.listdir(pc_path))])
+
+        file_list = np.concatenate(file_list, axis=0)
+        file_list = DataProcessing.shuffle_list(file_list)
+        
+        return file_list
+
 
     def crop_pc(self, points, labels, search_tree, pick_idx):
         # crop a fixed size point cloud for training

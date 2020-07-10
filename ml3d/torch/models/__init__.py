@@ -1,5 +1,5 @@
-from .randlanet import randlanet
+from .randlanet import RandLANet
 
 __all__ = [
-    'randlanet'
+    'RandLANet'
 ]

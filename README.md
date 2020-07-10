@@ -1,9 +1,18 @@
-# Open3D 3DML
+
+# Open3D-ML
+An extension of Open3D to address 3D Machine Learning tasks
 This repo is a proposal for the directory structure.
 
 The repo can be used together with the precompiled open3d pip package but will also be shipped with the open3d package.
-The file ```examples/inference_segmentation.py``` contains a working example showing how the repo can be used directly and after it has been integrated in the open3d namespace.
+The file ```examples/train_semantic_seg.py``` contains a working example showing how the repo can be used directly and after it has been integrated in the open3d namespace.
 
+TODO List:
+- [x] tensorboard
+- [ ] validation loader
+- [ ] re-training
+- [ ] strucutred configure file
+- [ ] alternative cached preprocessing
+- [ ] rewrite preprocessing
 
 ## Directories
 
@@ -21,36 +30,39 @@ The file ```examples/inference_segmentation.py``` contains a working example sho
           
 ```
 
+Some important functions of pipeline, model, and dataset classes,
+```
+pipline
+	__init__(model, dataset, cfg)
+	run_train
+	run_test
+	run_inference
+	compute metrics(iou, acc)
+
+model
+	__init__(cfg)
+	forward
+	preprocess         
+
+dataset
+	__init__(cfg)
+	save_test_result
+	get_sampler(split="training/test/validation")
+	get_data(file_path)
+```
+
 ## Usage example
 
-Most users will either use tf or torch. The recommended import code is 
-```python
-import open3d as o3d
-import open3d.core as o3c
-import open3d.ml.torch as ml3d
-# or
-import open3d.ml.tf as ml3d
-
-# using ml3d
-net = ml3d.models.mynet(params)
-dataset = ml3d.datasets.ScanNet(params)
-conv = ml3d.layers.ContinuousConv(params)
+First build the project
+```bash
+bash compile_op.sh
+pip install -e .
 ```
 
-When using this repo directly (e.g. for development) the imports are
-```python
-import open3d as o3d
-import open3d.core as o3c
-import ml3d.torch as ml3d
-# or
-import ml3d.tf as ml3d
 
-# using ml3d
-net = ml3d.models.mynet(params)
-dataset = ml3d.datasets.ScanNet(params)
-from open3d.ml.tf.layers import ContinuousConv; conv = ContinuousConv(params) # we don't need layers at the level of models and pipelines
+Run demo code
+```bash
+python examples/train_semantic_seg.py
+python examples/test_semantic_seg.py
+python examples/inference_semantic_seg.py
 ```
-> Note that in this case ```ml3d``` will not behave exactly like the packaged version because ```ml3d.layers``` and other functionality from the main repo will be missing. 
-> This should not pose a problem because
->  1. we could import the missing functionality in ```ml3d/[tf,torch]/__init__.py```
->  2. we don't need to use layers and ops for **using** models and pipelines. (pipelines and models will use absolute imports internally for getting the layers and ops)

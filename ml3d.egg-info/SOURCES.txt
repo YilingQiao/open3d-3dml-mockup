@@ -6,7 +6,6 @@ ml3d.egg-info/SOURCES.txt
 ml3d.egg-info/dependency_links.txt
 ml3d.egg-info/top_level.txt
 ml3d/datasets/__init__.py
-ml3d/datasets/s3dis.py
 ml3d/datasets/scannet.py
 ml3d/datasets/semantickitti.py
 ml3d/datasets/tools.py
@@ -42,3 +41,6 @@ ml3d/torch/models/util/criterion.py
 ml3d/torch/models/util/misc.py
 ml3d/torch/models/util/priority.py
 ml3d/torch/models/util/registry.py
+ml3d/torch/pipelines/__init__.py
+ml3d/torch/pipelines/pipeline.py
+ml3d/torch/pipelines/semantic_segmentation.py
